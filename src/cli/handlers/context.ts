@@ -45,6 +45,7 @@ import { projectsQueryString } from '../../shared/project-list.js';
 import { CONTEXT_OUTPUT_LIMIT } from '../../services/context/ContextBudget.js';
 import { consumeTelemetryNotice } from '../../services/telemetry/consent.js';
 import { writeSessionStartCardSlot } from '../session-start-card-slot-writer.js';
+import { hookClaudeConfigDir } from './hook-host.js';
 import {
   fetchTeamBrief,
   formatTeamBrief,
@@ -498,7 +499,11 @@ export const contextHandler: EventHandler = {
     const showLastMessage = settings.CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE === 'true';
     const sessionParam = showLastMessage && input.sessionId ? `&sessionId=${encodeURIComponent(input.sessionId)}` : '';
     const noticeBudgetParam = noticeReserveChars ? `&reserveChars=${noticeReserveChars}` : '';
-    const apiPath = `/api/context/inject?${projectsQuery}${platformSourceParam}&cwd=${encodeURIComponent(cwd)}${sessionParam}${noticeBudgetParam}`;
+    // CLAUDE_MEM_OBSERVER_PROFILE=session: the worker builds the health banner
+    // for this session's own Claude account.
+    const { claudeConfigDir } = hookClaudeConfigDir(input, normalizedPlatformSource ?? '', false, process.env);
+    const configDirParam = claudeConfigDir !== undefined ? `&claudeConfigDir=${encodeURIComponent(claudeConfigDir)}` : '';
+    const apiPath = `/api/context/inject?${projectsQuery}${platformSourceParam}&cwd=${encodeURIComponent(cwd)}${sessionParam}${noticeBudgetParam}${configDirParam}`;
     const colorApiPath = input.platform === 'claude-code' ? `${apiPath}&colors=true` : apiPath;
 
     const serverRender = serverRuntime

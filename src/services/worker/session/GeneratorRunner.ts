@@ -439,7 +439,7 @@ export async function startGeneratorWithProvider(
         // session-start warning is structurally blind to an entire outage
         // class: the allowance is spent, no observation will ever store, and
         // the user is told nothing.
-        recordObserverFailure(provider, pause);
+        recordObserverFailure(provider, { ...pause, profile: session.observerProfile });
       }
       // A 429 the CLI wrote as the reply (#5428) aborts without throwing too,
       // so it is booked here as the throttle it is, the way bookClassifiedFailure
@@ -720,6 +720,7 @@ function bookClassifiedFailure(
     action: error.action,
     url: error.url,
     requestId: error.requestId,
+    profile: session.observerProfile,
   });
   return resume;
 }

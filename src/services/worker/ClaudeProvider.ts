@@ -47,6 +47,7 @@ import { resolveContextWindowTokens, observationFieldMaxChars } from './context-
 import { recycleObserverConversation, loadSessionStartContext, openObserverGeneration, observesBarePrompts } from './session/recycle-conversation.js';
 import { MAX_CONSECUTIVE_SDK_STREAM_EXITS, RESPONSE_STALL_MS, ObserverResponsePacer } from './session/response-pacer.js';
 import { recordObserverFailure } from '../../shared/observer-health.js';
+import { observerConfigDirFor } from '../../shared/observer-profile.js';
 import type { ClaudeCredential } from '../../shared/quota-cooldown.js';
 import { optimizeObservationFields, buildFieldCompressionPrompt, type CompressedField, type FieldCompressor } from './field-optimizer.js';
 import { resolveFieldOptimizeTimeoutMs } from './retry.js';
@@ -455,21 +456,25 @@ export class ClaudeProvider {
     let responseProcessingThrew = false;
     try {
       session.unusableClaudeLoginReason = null;
+      // CLAUDE_MEM_OBSERVER_PROFILE=session: the login of the profile this
+      // session's own hook ran under, not the worker's.
+      const sessionConfigDir = observerConfigDirFor(session.claudeConfigDir);
       const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth(true, {
         standIn: session.claudeAuthOverride ?? undefined,
         onUnusableLogin: reason => { session.unusableClaudeLoginReason = reason; },
+        sessionConfigDir,
       }));
       session.observerAuth = observerCredentialOf(isolatedEnv);
       // A quota-fallback run is labelled by what it actually bills: the quota
       // guard protects a login it runs on, and never pauses a key.
-      const authMethod = !session.claudeAuthOverride ? getAuthMethodDescription()
+      const authMethod = !session.claudeAuthOverride ? getAuthMethodDescription(sessionConfigDir)
         : session.observerAuth === 'api-key' ? 'API key (quota fallback run)'
           : 'Claude Code OAuth token (quota fallback run)';
       // The account this generator bills for its whole life: its env (and so
       // its OAuth identity) is fixed at spawn, even if the setting changes
       // while it runs. Quota snapshots are tagged with it and checked against
       // it, and a refusal it hits arms the breaker under it.
-      const observerProfile = resolveConfigDirProfileKey();
+      const observerProfile = resolveConfigDirProfileKey(sessionConfigDir);
       session.observerProfile = observerProfile;
 
       logger.info('SDK', 'Starting SDK query', {
@@ -1122,11 +1127,16 @@ export class ClaudeProvider {
       thinkingStripped?: boolean;
       /** The session's quota-fallback credential (ActiveSession.claudeAuthOverride). */
       standIn?: ClaudeCredential;
+      /** The session's own config dir when CLAUDE_MEM_OBSERVER_PROFILE=session (observerConfigDirFor). */
+      sessionConfigDir?: string;
     },
     modelId: string,
     claudePath: string,
   ): Promise<string | null> {
-    const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth(true, { standIn: context.standIn }));
+    const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth(true, {
+      standIn: context.standIn,
+      sessionConfigDir: context.sessionConfigDir,
+    }));
     const controller = new AbortController();
     const abort = () => controller.abort();
     const signals = context.signals ?? [];
@@ -1208,6 +1218,7 @@ export class ClaudeProvider {
         signals: [signal, session.abortController.signal],
         thinkingStripped: session.observerThinkingStripped,
         standIn: session.claudeAuthOverride ?? undefined,
+        sessionConfigDir: observerConfigDirFor(session.claudeConfigDir),
       },
       modelId,
       claudePath,

@@ -15,15 +15,27 @@ import {
   writeStaleMarker,
   clearStaleMarker,
   resolveClaudeCredentialProfile,
+  resolveSessionCredentialProfile,
   resolveEffectiveClaudeConfigDir,
   type ClaudeCredentialProfile,
   type OAuthTokenResult,
 } from './oauth-token.js';
 
-/** #2753 — the credential profile's label for logging (never the token itself): 'default' for the bare keychain entry, else the config dir's basename. */
-function resolveConfigDirProfileLabel(): string {
+/**
+ * The credential profile a Claude spawn uses: the session's own one when
+ * CLAUDE_MEM_OBSERVER_PROFILE=session supplied it (observer-profile.ts; '' =
+ * the default profile), else the worker profile (CLAUDE_MEM_CLAUDE_CONFIG_DIR >
+ * env > default).
+ */
+function resolveSpawnCredentialProfile(sessionConfigDir?: string): ClaudeCredentialProfile {
+  if (sessionConfigDir !== undefined) return resolveSessionCredentialProfile(sessionConfigDir);
   const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
-  const { configDir, explicitConfigDir } = resolveClaudeCredentialProfile(settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR);
+  return resolveClaudeCredentialProfile(settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR);
+}
+
+/** #2753 — the credential profile's label for logging (never the token itself): 'default' for the bare keychain entry, else the config dir's basename. */
+function resolveConfigDirProfileLabel(sessionConfigDir?: string): string {
+  const { configDir, explicitConfigDir } = resolveSpawnCredentialProfile(sessionConfigDir);
   return explicitConfigDir ? basename(configDir) : 'default';
 }
 
@@ -42,10 +54,9 @@ export function credentialProfileKey(profile: ClaudeCredentialProfile): string {
   return `${basename(profile.configDir)}#${suffix}`;
 }
 
-/** The quota key for the credential the next Claude spawn will use. */
-export function resolveConfigDirProfileKey(): string {
-  const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
-  return credentialProfileKey(resolveClaudeCredentialProfile(settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR));
+/** The quota key for the credential the next Claude spawn will use (for a session whose own profile it uses, pass that config dir). */
+export function resolveConfigDirProfileKey(sessionConfigDir?: string): string {
+  return credentialProfileKey(resolveSpawnCredentialProfile(sessionConfigDir));
 }
 
 // Resolved lazily so tests (and any rare runtime path-overrides) can target a
@@ -282,7 +293,11 @@ function applyMissingProxyEnvFromClaudeSettings(isolatedEnv: Record<string, stri
   }
 }
 
-export function buildIsolatedEnv(includeCredentials: boolean = true): Record<string, string> {
+export function buildIsolatedEnv(
+  includeCredentials: boolean = true,
+  /** A session's own config dir (CLAUDE_MEM_OBSERVER_PROFILE=session); it replaces the worker profile below. */
+  sessionConfigDir?: string,
+): Record<string, string> {
   const isolatedEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !BLOCKED_ENV_VARS.includes(key)) {
@@ -312,8 +327,12 @@ export function buildIsolatedEnv(includeCredentials: boolean = true): Record<str
   // This never touches the worker's own paths.CLAUDE_CONFIG_DIR /
   // MARKETPLACE_ROOT, which stay derived solely from
   // process.env.CLAUDE_CONFIG_DIR at module load.
+  //
+  // A session's own profile takes the setting's place whole: an explicit one
+  // is stamped like an explicit setting, the default one is left unset like
+  // the default setting.
   const configDirSettings = SettingsDefaultsManager.loadFromFile(paths.settings());
-  const { configDir, explicitConfigDir } = resolveClaudeCredentialProfile(configDirSettings.CLAUDE_MEM_CLAUDE_CONFIG_DIR);
+  const { configDir, explicitConfigDir } = resolveSpawnCredentialProfile(sessionConfigDir);
   // After the process.env copy, so a proxy the worker already has wins.
   applyMissingProxyEnvFromClaudeSettings(isolatedEnv, configDir);
   if (explicitConfigDir) {
@@ -420,6 +439,7 @@ export async function buildIsolatedEnvWithFreshOAuth(
   {
     standIn,
     onUnusableLogin,
+    sessionConfigDir,
   }: {
     standIn?: ClaudeCredential;
     /**
@@ -429,9 +449,11 @@ export async function buildIsolatedEnvWithFreshOAuth(
      * run, so a "Not logged in" reply can be explained per session.
      */
     onUnusableLogin?: (reason: string) => void;
+    /** The session's own config dir (CLAUDE_MEM_OBSERVER_PROFILE=session): the child runs on, and is billed to, that profile's login. */
+    sessionConfigDir?: string;
   } = {},
 ): Promise<Record<string, string>> {
-  const isolatedEnv = buildIsolatedEnv(includeCredentials);
+  const isolatedEnv = buildIsolatedEnv(includeCredentials, sessionConfigDir);
 
   // Defensive: ensure no parent-process OAuth token survives this path even
   // if BLOCKED_ENV_VARS is bypassed. Issue #2215.
@@ -514,7 +536,7 @@ export async function buildIsolatedEnvWithFreshOAuth(
 
   let result: OAuthTokenResult;
   try {
-    result = await readClaudeOAuthToken();
+    result = await readClaudeOAuthToken(undefined, sessionConfigDir);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     logger.warn('OAUTH', 'OAuth token read failed unexpectedly; proceeding without token', {}, err);
@@ -599,7 +621,7 @@ export function hasConfiguredClaudeOAuthToken(): boolean {
   return !!token && !isPastExpiry(decodeJwtExpMs(token));
 }
 
-export function getAuthMethodDescription(): string {
+export function getAuthMethodDescription(sessionConfigDir?: string): string {
   if (hasAnthropicApiKey()) {
     return 'API key (from ~/.claude-mem/.env)';
   }
@@ -615,7 +637,7 @@ export function getAuthMethodDescription(): string {
   // #2753: names the resolved profile (suffix/dir basename or 'default'),
   // never the token itself — the profile is the whole point (which
   // config-dir identity's keychain entry this worker will inject).
-  const profile = resolveConfigDirProfileLabel();
+  const profile = resolveConfigDirProfileLabel(sessionConfigDir);
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     return `Claude Code OAuth token (env, refreshed via keychain at spawn) profile=${profile}`;
   }

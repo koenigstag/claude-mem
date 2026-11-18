@@ -40,6 +40,12 @@ export interface ActiveSession {
    */
   observerProfile?: string;
   /**
+   * The CLAUDE_CONFIG_DIR this session's own hook ran under, as session-init
+   * reported it ('' when it had none: the default profile). Used only when
+   * CLAUDE_MEM_OBSERVER_PROFILE=session; unset when the host reported nothing.
+   */
+  claudeConfigDir?: string;
+  /**
    * The credential the latest Claude generator was spawned with; fixed at spawn
    * like observerProfile. Unset for a gateway token, which is neither.
    */

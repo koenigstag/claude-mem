@@ -66,6 +66,13 @@ export class SessionManager {
   /** Telegram wrap-ups started by deliverSessionWrapupInBackground and not yet settled. */
   private sessionWrapupsInFlight = 0;
 
+  /**
+   * The CLAUDE_CONFIG_DIR each session's hook last reported (session-init).
+   * Kept apart from the ActiveSession so a session object rebuilt after it was
+   * dropped (an observation arriving with no new prompt) still knows it.
+   */
+  private readonly reportedClaudeConfigDirs = new Map<number, string>();
+
   constructor(
     dbManager: DatabaseManager,
     private readonly transportResumeClock: TransportResumeClock = defaultTransportResumeClock,
@@ -254,6 +261,13 @@ export class SessionManager {
     this.telegramWrapupFormatter = formatter;
   }
 
+  /** Record the CLAUDE_CONFIG_DIR a session's hook reported, on the live session too. */
+  noteClaudeConfigDir(sessionDbId: number, configDir: string): void {
+    this.reportedClaudeConfigDirs.set(sessionDbId, configDir);
+    const session = this.sessions.get(sessionDbId);
+    if (session) session.claudeConfigDir = configDir;
+  }
+
   initializeSession(
     sessionDbId: number,
     currentUserPrompt?: string,
@@ -383,7 +397,8 @@ export class SessionManager {
       lastGeneratorActivity: Date.now(),  // Initialize for stale detection (Issue #1099)
       pendingAgentId: null,   // Subagent identity carried from the most recent claimed message
       pendingAgentType: null,
-      pausedReason: null
+      pausedReason: null,
+      claudeConfigDir: this.reportedClaudeConfigDirs.get(sessionDbId),
     };
 
     logger.debug('SESSION', 'Creating new session object (memorySessionId cleared to prevent stale resume)', {

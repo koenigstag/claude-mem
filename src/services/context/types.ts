@@ -17,6 +17,12 @@ export interface ContextInput {
    */
   includeHealthWarning?: boolean;
   /**
+   * The Claude account (config-dir profile key) the health banner is for: the
+   * session's own one under CLAUDE_MEM_OBSERVER_PROFILE=session. Unset, the
+   * banner reports the account the worker selects.
+   */
+  observerProfile?: string;
+  /**
    * False renders without the prior session's reply whatever the setting says:
    * for a block that may be cached, which any session can read.
    */

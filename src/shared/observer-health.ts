@@ -63,6 +63,12 @@ export interface ObserverHealthState {
    */
   lastErrorKind?: string | null;
   /**
+   * 'claude' only: the account (config-dir profile key) whose request failed,
+   * when the failure was booked for one session's generator. A quota banner
+   * built for another account skips it (ContextBuilder.observerHealthWarning).
+   */
+  lastErrorProfile?: string | null;
+  /**
    * Intentional pause while the provider quota breaker is withholding
    * generator starts. Distinct from lastError*: a cooldown is not a failure,
    * and must not flip the ledger to unhealthy. Null when no breaker is armed
@@ -153,6 +159,8 @@ export interface ObserverFailureDetail {
   action?: string;
   url?: string;
   requestId?: string;
+  /** 'claude' only: the account whose generator failed (session.observerProfile). */
+  profile?: string;
 }
 
 export const OBSERVER_HEALTH_FILENAME = 'observer-health.json';
@@ -341,6 +349,7 @@ export function recordObserverFailure(
       // after a classified one must not keep the stale action/link/request id.
       lastErrorCode: detail.code ?? null,
       lastErrorKind: nextKind,
+      lastErrorProfile: detail.profile ?? null,
       lastErrorAction: detail.action ? scrubErrorMessage(detail.action) : null,
       lastErrorUrl: detail.url ?? null,
       lastErrorRequestId: detail.requestId ?? null,

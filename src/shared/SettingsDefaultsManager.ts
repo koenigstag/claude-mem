@@ -9,6 +9,7 @@ import { isOpenRouterApiUrl } from './openrouter-base-url.js';
 import { settingsTarget, withoutStaleRootCopies } from './settings-document.js';
 import { expandHome } from './expand-home.js';
 import { getDefaultServerPort, getDefaultWorkerPort } from './install-port.js';
+import { DEFAULT_OBSERVER_PROFILE_MODE } from './observer-profile-mode.js';
 
 // A fresh settings.json is seeded with EVERY default (see loadFromFile), and
 // persisted values then win over DEFAULTS. So any install created after the
@@ -314,6 +315,8 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CLAUDE_CONFIG_DIR: string;
   /** #4689 — transcript-only CLAUDE_CONFIG_DIR for the spawned SDK subprocess (keeps internal session transcripts out of ~/.claude/projects). Credentials stay on the default profile; only honored when CLAUDE_MEM_CLAUDE_CONFIG_DIR is empty. Empty = transcripts follow the credential profile dir. */
   CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR: string;
+  /** Whose Claude login a session's observer bills. 'worker' = one profile for every session (CLAUDE_MEM_CLAUDE_CONFIG_DIR, else the worker's own CLAUDE_CONFIG_DIR / default). 'session' = the CLAUDE_CONFIG_DIR the session's hook reported, so each account's sessions are summarized on that account; a session that reported none uses the worker profile. */
+  CLAUDE_MEM_OBSERVER_PROFILE: string;
   CLAUDE_MEM_MODE: string;
   CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS: string;
   CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS: string;
@@ -638,6 +641,7 @@ export class SettingsDefaultsManager {
     CLAUDE_CODE_PATH: '', // Empty means auto-detect via 'which claude'
     CLAUDE_MEM_CLAUDE_CONFIG_DIR: '', // #2753 — override CLAUDE_CONFIG_DIR for the keychain lookup + SDK subprocess only; empty = fall through to process.env.CLAUDE_CONFIG_DIR/default
     CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR: '', // #4689 — transcript-only CLAUDE_CONFIG_DIR for the SDK subprocess (out of ~/.claude/projects); credentials stay on the default profile; only honored when CLAUDE_MEM_CLAUDE_CONFIG_DIR is empty
+    CLAUDE_MEM_OBSERVER_PROFILE: DEFAULT_OBSERVER_PROFILE_MODE, // one login for every session, or each session's own CLAUDE_CONFIG_DIR (observer-profile-mode.ts)
     CLAUDE_MEM_MODE: 'code', // Default mode profile
     CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS: 'false',
     CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS: 'false',

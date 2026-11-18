@@ -58,6 +58,7 @@ import {
   type QuotaFallbackResolver,
   type QuotaProvider,
 } from '../../shared/quota-cooldown.js';
+import { observerBillsSessionProfile } from '../../shared/observer-profile-mode.js';
 
 /**
  * Every provider dispatch can name. `openai-compatible` is the generic
@@ -440,8 +441,13 @@ const quotaNoticeResolution: QuotaFallbackResolver = (held, nowMs, activeHolds) 
   const displayName = (provider: string, auth?: string) => quotaProviderDisplayName(provider, settings, auth);
   const retryName = (provider: string, auth?: string) => provider === 'claude' && auth !== 'api-key'
     ? 'Claude' : displayName(provider, auth);
+  // CLAUDE_MEM_OBSERVER_PROFILE=session: sessions bill different Claude
+  // accounts, so every account's hold is kept and each session's banner picks
+  // its own (ContextBuilder.observerHealthWarning).
+  const everyAccount = observerBillsSessionProfile(settings);
   const holds: ObserverQuotaNoticeHold[] = activeHolds
-    .filter(hold => cooldownAppliesToCurrentAccount(hold) && (hold.provider === main || hold.provider === backup || hold.provider === routed))
+    .filter(hold => (everyAccount || cooldownAppliesToCurrentAccount(hold))
+      && (hold.provider === main || hold.provider === backup || hold.provider === routed))
     .map(hold => ({
       provider: hold.provider,
       ...(hold.profile ? { profile: hold.profile } : {}),
@@ -454,7 +460,10 @@ const quotaNoticeResolution: QuotaFallbackResolver = (held, nowMs, activeHolds) 
     }));
   const selectedProvider = getSelectedProvider();
   const standIn = selectedProvider === 'claude' && isQuotaCooldownHolding('claude', nowMs) ? claudeQuotaStandIn() : null;
-  const serving = !isQuotaCooldownHolding(selectedProvider, nowMs) || standIn
+  // A Claude hold kept for another account's sessions still stops Claude for them.
+  const claudeHeldForSessions = everyAccount && selectedProvider === 'claude'
+    && holds.some(hold => hold.provider === 'claude');
+  const serving = (!isQuotaCooldownHolding(selectedProvider, nowMs) && !claudeHeldForSessions) || standIn
     ? selectedProvider : undefined;
   const servingAuth = serving === 'claude' ? standIn ?? mainAuth : undefined;
   const servingDisplayName = serving === 'claude' && standIn === 'api-key'

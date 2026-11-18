@@ -18,7 +18,7 @@ import { checkTreeSitterCliLoadable } from '../../services/smart-file-read/tree-
 import { resolveWithinWorkspace } from '../../services/smart-file-read/workspace-path.js';
 import { claimFileContextInjection } from './file-context-dedupe.js';
 import { memorySearchHandler } from './memory-search.js';
-import { isQwenCodeHookEvent } from './session-init.js';
+import { isQwenCodeHookEvent } from './hook-host.js';
 import { resolveRuntimeContext } from '../../services/hooks/runtime-selector.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import {

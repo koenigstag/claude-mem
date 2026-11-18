@@ -108,9 +108,16 @@ export function setClaudeProfileResolverForTesting(resolver: (() => string) | nu
  * observer-health.json with its profile. A reader that skipped it held a
  * switched-to account's backlog behind the old account's breaker and told it
  * capture was paused.
+ *
+ * `profile` names the account when it is a session's own rather than the
+ * worker's (CLAUDE_MEM_OBSERVER_PROFILE=session); omitted, the question is
+ * about the account selected now.
  */
-export function cooldownAppliesToCurrentAccount(cooldown: { provider: string; profile?: string }): boolean {
-  return cooldown.provider !== 'claude' || cooldown.profile === resolveClaudeProfile();
+export function cooldownAppliesToCurrentAccount(
+  cooldown: { provider: string; profile?: string },
+  profile?: string,
+): boolean {
+  return cooldown.provider !== 'claude' || cooldown.profile === (profile ?? resolveClaudeProfile());
 }
 
 function defaultCooldownFilePath(): string {
@@ -403,10 +410,12 @@ export function isQuotaCooldownActive(
   provider: QuotaProvider,
   nowMs: number = Date.now(),
   cooldownMs?: number,
+  /** A session's own Claude account (see cooldownAppliesToCurrentAccount). */
+  profile?: string,
 ): boolean {
   hydrateFromDisk();
   const state = cooldowns.get(provider);
-  if (!state || !cooldownAppliesToCurrentAccount(state)) return false;
+  if (!state || !cooldownAppliesToCurrentAccount(state, profile)) return false;
   return nowMs - state.armedAtMs < (cooldownMs ?? resolveQuotaCooldownMs(state.window));
 }
 
@@ -451,6 +460,12 @@ export function isQuotaCooldownHolding(
 export function tryAdmitQuotaProbe(
   provider: QuotaProvider,
   nowMs: number = Date.now(),
+  /**
+   * A session's own Claude account (CLAUDE_MEM_OBSERVER_PROFILE=session).
+   * Sessions of several accounts run side by side then, so another account's
+   * breaker is left armed for its own sessions instead of being dropped.
+   */
+  profile?: string,
 ): QuotaProbeAdmission {
   // A breaker armed before a restart is still armed. Without this the first
   // call in a fresh process finds an empty Map, admits, and takes no claim —
@@ -462,7 +477,8 @@ export function tryAdmitQuotaProbe(
   // pausing capture until that account resets. Switching back re-probes the
   // first account once; one request is cheaper than keeping a breaker per
   // account.
-  if (state && !cooldownAppliesToCurrentAccount(state)) {
+  if (state && !cooldownAppliesToCurrentAccount(state, profile)) {
+    if (profile !== undefined) return { admitted: true, claimId: null };
     clearQuotaCooldown(provider);
     state = undefined;
   }

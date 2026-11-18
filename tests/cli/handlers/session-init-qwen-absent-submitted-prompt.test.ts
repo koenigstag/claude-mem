@@ -4,9 +4,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { claudeCodeAdapter } from '../../../src/cli/adapters/claude-code.js';
+import { isQwenCodeHookEvent, isQwenTranscriptPath } from '../../../src/cli/handlers/hook-host.js';
 import {
-  isQwenCodeHookEvent,
-  isQwenTranscriptPath,
   sessionInitHandler,
   setSessionInitDependenciesForTesting,
 } from '../../../src/cli/handlers/session-init.js';

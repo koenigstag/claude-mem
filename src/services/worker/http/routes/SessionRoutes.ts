@@ -53,6 +53,8 @@ import {
   cooldownAppliesToCurrentAccount,
   resolveQuotaCooldownMs,
 } from '../../../../shared/quota-cooldown.js';
+import { observerConfigDirFor, parseReportedClaudeConfigDir } from '../../../../shared/observer-profile.js';
+import { resolveConfigDirProfileKey } from '../../../../shared/EnvManager.js';
 import { isClassified, type ClassifiedProviderError } from '../../provider-errors.js';
 import { classifyClaudeError } from '../../ClaudeProvider.js';
 import { isSessionParkedForSlot } from '../../../../supervisor/process-registry.js';
@@ -212,17 +214,24 @@ export class SessionRoutes extends BaseRouteHandler {
   public resumePendingSessions(source: string, includeOperatorOnly: boolean = false): number {
     let sessionIds = this.sessionManager.getResumableSessionIds(includeOperatorOnly);
     if (!includeOperatorOnly && sessionIds.length > 0) {
-      // Each session is paced on the provider its own source dispatches to.
-      const probed = new Set<SelectableProvider>();
+      // Each session is paced on the provider its own source dispatches to. A
+      // Claude session on its own account (CLAUDE_MEM_OBSERVER_PROFILE=session)
+      // is paced only by that account's breaker; every other session asks
+      // about the worker's account.
+      const probed = new Set<string>();
+      const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       sessionIds = sessionIds.filter(sessionDbId => {
-        const provider = getSelectedProvider(this.sessionManager.getSession(sessionDbId)?.platformSource);
+        const session = this.sessionManager.getSession(sessionDbId);
+        const provider = getSelectedProvider(session?.platformSource);
         const cooldown = getQuotaCooldown(provider);
+        const profile = this.sessionObserverProfileKey(session, provider, settings);
         // The quota-fallback credential serves while the primary one is held, so it paces nothing.
-        if (!cooldown || !cooldownAppliesToCurrentAccount(cooldown)
+        if (!cooldown || !cooldownAppliesToCurrentAccount(cooldown, profile)
           || (provider === 'claude' && claudeQuotaStandIn())) return true;
-        if (isQuotaCooldownActive(provider)) return false;
-        if (probed.has(provider)) return false;
-        probed.add(provider);
+        if (isQuotaCooldownActive(provider, Date.now(), undefined, profile)) return false;
+        const probeKey = `${provider}|${profile ?? ''}`;
+        if (probed.has(probeKey)) return false;
+        probed.add(probeKey);
         return true;
       });
     }
@@ -233,6 +242,21 @@ export class SessionRoutes extends BaseRouteHandler {
       });
     }
     return sessionIds.length;
+  }
+
+  /**
+   * The quota key of the Claude account a session's observer bills when that
+   * is the session's own (CLAUDE_MEM_OBSERVER_PROFILE=session), else undefined:
+   * quota reads then ask about the worker's account.
+   */
+  private sessionObserverProfileKey(
+    session: { claudeConfigDir?: string } | undefined,
+    provider: string,
+    settings?: { CLAUDE_MEM_OBSERVER_PROFILE?: string },
+  ): string | undefined {
+    if (provider !== 'claude') return undefined;
+    const configDir = observerConfigDirFor(session?.claudeConfigDir, settings);
+    return configDir !== undefined ? resolveConfigDirProfileKey(configDir) : undefined;
   }
 
   public ensureGeneratorRunning(sessionDbId: number, source: string): Promise<void> {
@@ -529,7 +553,11 @@ export class SessionRoutes extends BaseRouteHandler {
       // Claim the probe rather than merely reading the clock: every live session
       // sees the window elapse at the same instant, so a bare check would let
       // them all through together.
-      const admission = tryAdmitQuotaProbe(selectedProvider);
+      const admission = tryAdmitQuotaProbe(
+        selectedProvider,
+        Date.now(),
+        this.sessionObserverProfileKey(session, selectedProvider),
+      );
       // The primary Claude credential is held: run on the quota-fallback one
       // (dispatch logs the switch). No probe claim is taken; the primary's own
       // probe still runs when its window elapses.
@@ -702,6 +730,8 @@ export class SessionRoutes extends BaseRouteHandler {
     // The checkout `project` was resolved from, and how (gate P1-2).
     cwd: z.string().optional(),
     projectKeySource: z.string().optional(),
+    // The CLAUDE_CONFIG_DIR the session's hook ran under ('' = default profile).
+    claudeConfigDir: z.string().max(4096).optional(),
   }).passthrough();
 
   private static readonly observationsByClaudeIdSchema = z.object({
@@ -938,6 +968,14 @@ export class SessionRoutes extends BaseRouteHandler {
         return;
       }
       throw error;
+    }
+
+    // The Claude profile this session's hook ran under, for
+    // CLAUDE_MEM_OBSERVER_PROFILE=session. Hosts that do not report one keep
+    // whatever an earlier prompt reported.
+    const reportedConfigDir = parseReportedClaudeConfigDir(req.body.claudeConfigDir);
+    if (reportedConfigDir !== undefined) {
+      this.sessionManager.noteClaudeConfigDir(sessionDbId, reportedConfigDir);
     }
 
     // The checkout `project` was resolved from, and how it was derived, so a

@@ -62,6 +62,7 @@ import {
   isQuotaGuardPause,
   renderObserverHealthWarning,
   renderObserverQuotaCooldownNotice,
+  type ObserverHealthState,
 } from '../../shared/observer-health.js';
 import { cooldownAppliesToCurrentAccount } from '../../shared/quota-cooldown.js';
 import { readSyncHealth, renderSyncHealthWarning } from '../../shared/sync-health.js';
@@ -302,8 +303,32 @@ function paintRed(text: string): string {
  * (buildAgentContextOutput) and the terminal preview above it
  * (prependObserverHealthWarning).
  */
-export function withObserverHealthWarning(text: string, forHuman: boolean = false): string {
-  return appendObserverHealthWarning(observerHealthWarning(forHuman), text);
+export function withObserverHealthWarning(
+  text: string,
+  forHuman: boolean = false,
+  account?: ObserverHealthAccount,
+): string {
+  return appendObserverHealthWarning(observerHealthWarning(forHuman, account), text);
+}
+
+/** observerHealthWarning's account for a block any session may read: a hold on any account counts. */
+export const ANY_OBSERVER_ACCOUNT = Symbol('any-observer-account');
+
+/**
+ * Whose Claude holds a health banner reports: a config-dir profile key (a
+ * session's own account, CLAUDE_MEM_OBSERVER_PROFILE=session), every account,
+ * or, unset, the account the worker selects now.
+ */
+export type ObserverHealthAccount = string | typeof ANY_OBSERVER_ACCOUNT | undefined;
+
+/**
+ * A quota failure booked for one Claude account says nothing about another.
+ * Other failures, and failures booked without an account, count for every account.
+ */
+function failureAppliesToAccount(health: ObserverHealthState, account: ObserverHealthAccount): boolean {
+  if (account === ANY_OBSERVER_ACCOUNT || !health.lastErrorProfile) return true;
+  if (!isQuotaFailure(health) && !isQuotaGuardPause(health)) return true;
+  return cooldownAppliesToCurrentAccount({ provider: health.lastErrorProvider ?? '', profile: health.lastErrorProfile }, account);
 }
 
 /**
@@ -314,7 +339,7 @@ export function withObserverHealthWarning(text: string, forHuman: boolean = fals
  * render repeatedly, and `readObserverHealth` touches state: re-reading it per
  * reduction would let the measured length change under the loop.
  */
-export function observerHealthWarning(forHuman: boolean = false): string {
+export function observerHealthWarning(forHuman: boolean = false, account?: ObserverHealthAccount): string {
   const health = readObserverHealth();
   // The structured quota notice knows whether the main provider or its backup
   // is saving, so it supersedes the failure that armed that hold, including
@@ -322,19 +347,21 @@ export function observerHealthWarning(forHuman: boolean = false): string {
   // A Claude hold only applies to the account it was armed under.
   //
   // The notice was mirrored under whichever account was selected then, so a
-  // Claude hold is dropped here unless it pauses the account selected now. A
-  // hold mirrored before holds carried their own account uses the ledger's.
+  // Claude hold is dropped here unless it pauses the account the banner is
+  // for. A hold mirrored before holds carried their own account uses the ledger's.
+  const appliesTo = (hold: { provider: string; profile?: string }): boolean =>
+    account === ANY_OBSERVER_ACCOUNT || cooldownAppliesToCurrentAccount(hold, account);
   const mirrored = health?.quotaCooldown;
   const cooldown = mirrored?.notice
     ? { ...mirrored, notice: { ...mirrored.notice, holds: mirrored.notice.holds.filter(hold =>
-      cooldownAppliesToCurrentAccount({ provider: hold.provider, profile: hold.profile ?? mirrored.profile })) } }
+      appliesTo({ provider: hold.provider, profile: hold.profile ?? mirrored.profile })) } }
     : mirrored;
   let notice: string | null = null;
   if (health && isObserverQuotaCooldownActive(health) && cooldown
-    && (cooldown.notice ? cooldown.notice.holds.length > 0 : cooldownAppliesToCurrentAccount(cooldown))
+    && (cooldown.notice ? cooldown.notice.holds.length > 0 : appliesTo(cooldown))
     && (!isObserverUnhealthy(health) || (cooldown.notice && (isQuotaFailure(health) || isQuotaGuardPause(health))))) {
     notice = renderObserverQuotaCooldownNotice({ ...health, quotaCooldown: cooldown });
-  } else if (isObserverUnhealthy(health)) {
+  } else if (isObserverUnhealthy(health) && failureAppliesToAccount(health, account)) {
     notice = renderObserverHealthWarning(health);
   }
   // Cloud sync health rides the same slot: a paused (401/403) or long-failing
@@ -371,7 +398,7 @@ export function healthWarningForContext(
   forHuman: boolean = false
 ): string {
   if (input?.includeHealthWarning === false) return '';
-  return observerHealthWarning(forHuman);
+  return observerHealthWarning(forHuman, input?.observerProfile);
 }
 
 function appendObserverHealthWarning(warning: string, text: string): string {

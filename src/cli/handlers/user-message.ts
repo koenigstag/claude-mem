@@ -12,6 +12,7 @@ import { proTrialLine } from '../../shared/pro-promo.js';
 import { shouldTrackProject } from '../../shared/should-track-project.js';
 import { projectsQueryString } from '../../shared/project-list.js';
 import { getProjectContext } from '../../utils/project-name.js';
+import { hookClaudeConfigDir } from './hook-host.js';
 
 export const userMessageHandler: EventHandler = {
   async execute(input: NormalizedHookInput): Promise<HookResult> {
@@ -32,9 +33,13 @@ export const userMessageHandler: EventHandler = {
     const platformSourceParam = input.platform
       ? `&platformSource=${encodeURIComponent(normalizePlatformSource(input.platform))}`
       : '';
+    const { claudeConfigDir } = input.platform
+      ? hookClaudeConfigDir(input, normalizePlatformSource(input.platform), false, process.env)
+      : {};
+    const configDirParam = claudeConfigDir !== undefined ? `&claudeConfigDir=${encodeURIComponent(claudeConfigDir)}` : '';
 
     const result = await executeWithWorkerFallback<string>(
-      `/api/context/inject?${projectsQuery}${colorsParam}${platformSourceParam}`,
+      `/api/context/inject?${projectsQuery}${colorsParam}${platformSourceParam}${configDirParam}`,
       'GET',
     );
 

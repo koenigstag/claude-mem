@@ -126,6 +126,17 @@ export function resolveClaudeCredentialProfile(settingValue?: string): ClaudeCre
 }
 
 /**
+ * The credential profile of a session's own CLAUDE_CONFIG_DIR as its Claude
+ * Code hook reported it (CLAUDE_MEM_OBSERVER_PROFILE=session): '' means the
+ * session had none, so the default profile. A reported dir is explicit even
+ * when it names the default path, the way the CLI treats an exported one (#4149).
+ */
+export function resolveSessionCredentialProfile(reportedConfigDir: string): ClaudeCredentialProfile {
+  if (!reportedConfigDir) return { configDir: resolveEffectiveClaudeConfigDir(DEFAULT_CLAUDE_CONFIG_DIR), explicitConfigDir: false };
+  return { configDir: resolveEffectiveClaudeConfigDir(reportedConfigDir), explicitConfigDir: true };
+}
+
+/**
  * #2753 — macOS derivation, empirically verified on the Studio (see #2756/
  * #2753 background table): Claude Code stores credentials under
  * 'Claude Code-credentials' for the default profile, and under
@@ -664,6 +675,12 @@ function readEnvOAuthToken(): OAuthTokenResult {
 async function readStoredClaudeCredential(
   profile: ClaudeCredentialProfile,
   execImpl: typeof execFileAsync,
+  /**
+   * False for a session's own explicit profile (CLAUDE_MEM_OBSERVER_PROFILE=
+   * session): the OS store's bare entry belongs to the default profile's
+   * account, so it must not stand in for another profile's login.
+   */
+  allowLegacyStore = true,
 ): Promise<OAuthTokenResult> {
   if (process.platform === 'darwin') {
     const keychainResult = await readMacOsKeychain(deriveMacKeychainServiceName(profile), execImpl);
@@ -674,7 +691,7 @@ async function readStoredClaudeCredential(
   }
 
   const fileResult = readClaudeCredentialsFile(profile.configDir);
-  if (fileResult.kind !== 'absent') return fileResult;
+  if (fileResult.kind !== 'absent' || !allowLegacyStore) return fileResult;
 
   let legacyStoreResult: OAuthTokenResult;
   switch (process.platform) {
@@ -709,10 +726,23 @@ async function readStoredClaudeCredential(
  * than only exercising deriveMacKeychainServiceName/readMacOsKeychain as
  * standalone units. Defaults to the real execFileAsync for every production
  * call site (only src/shared/EnvManager.ts calls this today, with no args).
+ *
+ * `sessionConfigDir` is a session's own profile as its hook reported it
+ * (CLAUDE_MEM_OBSERVER_PROFILE=session; '' = the default profile). Only that
+ * profile's stored login is read: the worker's CLAUDE_CODE_OAUTH_TOKEN may
+ * belong to another account, and so may the OS store's bare entry unless the
+ * session is on the default profile. Billing a session to the wrong account is
+ * the defect this mode exists to prevent.
  */
 export async function readClaudeOAuthToken(
   execImpl: typeof execFileAsync = execFileAsync,
+  sessionConfigDir?: string,
 ): Promise<OAuthTokenResult> {
+  if (sessionConfigDir !== undefined) {
+    const profile = resolveSessionCredentialProfile(sessionConfigDir);
+    return readStoredClaudeCredential(profile, execImpl, !profile.explicitConfigDir);
+  }
+
   // #2753 / #4149 — resolve the credential profile (setting > env > default)
   // once per call. Its config dir locates `.credentials.json` on every
   // platform; only the macOS keychain also derives a service name from it.

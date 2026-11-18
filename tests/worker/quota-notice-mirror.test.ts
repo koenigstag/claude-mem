@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OBSERVER_HEALTH_FILENAME, readObserverHealth, renderObserverQuotaCooldownNotice } from '../../src/shared/observer-health.js';
+import { OBSERVER_HEALTH_FILENAME, readObserverHealth, recordObserverFailure, renderObserverQuotaCooldownNotice } from '../../src/shared/observer-health.js';
 import {
   getQuotaCooldown,
   QUOTA_COOLDOWN_FILENAME,
@@ -12,7 +12,7 @@ import {
 import { setClaudeFallbackReadinessForTesting } from '../../src/shared/claude-fallback-readiness.js';
 import { getSelectedProvider, resetQuotaFallbackStateForTesting } from '../../src/services/worker/provider-dispatch.js';
 import { paths } from '../../src/shared/paths.js';
-import { observerHealthWarning } from '../../src/services/context/ContextBuilder.js';
+import { ANY_OBSERVER_ACCOUNT, observerHealthWarning } from '../../src/services/context/ContextBuilder.js';
 
 const NOW = Date.parse('2026-10-28T03:15:16.000Z'); // Tuesday, 8:15:16 PM in Los Angeles.
 const MODEL_LINE = "(Assistant: at the start of your first reply, tell the user in one sentence that claude-mem has paused saving memories and why. Don't restart the worker or suggest it.)";
@@ -186,6 +186,27 @@ describe('quota notice from the persisted dispatch mirror', () => {
     expect(health.quotaCooldown?.provider).toBe('claude');
     expect(health.quotaCooldown?.notice?.holds.map(hold => hold.provider)).toEqual(['gemini']);
     expect(observerHealthWarning()).toBe("ℹ️ claude-mem is using your Claude plan to save memories because Gemini says you're out of quota. It switches back on its own and tries Gemini again at 8:45 PM. Nothing to do.");
+  });
+
+  it('shows a per-session Claude hold only to sessions on the held account', () => {
+    writeFileSync(paths.settings(), JSON.stringify({ CLAUDE_MEM_OBSERVER_PROFILE: 'session' }));
+    Object.assign(process.env, { CLAUDE_MEM_PROVIDER: 'claude', CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: 'off' });
+    recordQuotaExhausted('claude', 'weekly reserve guard', 'seven_day', NOW, 'default', 'subscription', {
+      kind: 'limit_guard', window: 'seven_day', usagePercent: 99, thresholdPercent: 93,
+    });
+
+    expect(observerHealthWarning(false, 'default')).toContain('claude-mem has paused saving memories');
+    expect(observerHealthWarning(false, 'account-b#0123abcd')).toBe('');
+    expect(observerHealthWarning(false, ANY_OBSERVER_ACCOUNT)).not.toBe('');
+  });
+
+  it('shows a quota failure streak only to sessions on the account that failed', () => {
+    for (let i = 0; i < 3; i++) {
+      recordObserverFailure('claude', { message: 'weekly allowance exhausted', kind: 'quota_exhausted', profile: 'default' });
+    }
+
+    expect(observerHealthWarning(false, 'default')).not.toBe('');
+    expect(observerHealthWarning(false, 'account-b#0123abcd')).toBe('');
   });
 
   it.each([

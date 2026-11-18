@@ -19,7 +19,9 @@ import {
   renderSemanticContext,
 } from '../../../../shared/semantic-context.js';
 import { countObservationsByProjects } from '../../../context/ObservationCompiler.js';
-import { observerHealthWarning, withObserverHealthWarning } from '../../../context/ContextBuilder.js';
+import { ANY_OBSERVER_ACCOUNT, observerHealthWarning, withObserverHealthWarning } from '../../../context/ContextBuilder.js';
+import { observerConfigDirFor, parseReportedClaudeConfigDir } from '../../../../shared/observer-profile.js';
+import { resolveConfigDirProfileKey } from '../../../../shared/EnvManager.js';
 import type { ContextInjectStats } from '../../../context/ContextBuilder.js';
 import {
   ALL_PLATFORM_SOURCES_CACHE_KEY,
@@ -453,6 +455,13 @@ export class SearchRoutes extends BaseRouteHandler {
     const reserveChars = Number.isFinite(rawReserve)
       ? Math.min(CONTEXT_OUTPUT_LIMIT, Math.max(0, Math.floor(rawReserve))) : 0;
     const platformSource = this.getOptionalPlatformSourceFromRequest(req);
+    // CLAUDE_MEM_OBSERVER_PROFILE=session: the banner reports the holds of the
+    // asking session's own Claude account, not the worker's.
+    const sessionConfigDir = observerConfigDirFor(
+      parseReportedClaudeConfigDir(req.query.claudeConfigDir),
+      this.getCachedSettings(),
+    );
+    const observerProfile = sessionConfigDir !== undefined ? resolveConfigDirProfileKey(sessionConfigDir) : undefined;
 
     if (!projectsParam) {
       this.badRequest(res, 'Project(s) parameter is required');
@@ -480,7 +489,7 @@ export class SearchRoutes extends BaseRouteHandler {
     const renderSequenceAtStart = this.contextCache?.beginRenderSequence?.();
     let rendered: ContextInjectRender;
     try {
-      rendered = await this.renderContextInjectBody({ projects, platformSource, forHuman, full, cwd: hostCwd || undefined, sessionId: hostSessionId, includePriorMessage: showLastMessage, reserveChars });
+      rendered = await this.renderContextInjectBody({ projects, platformSource, forHuman, full, cwd: hostCwd || undefined, sessionId: hostSessionId, includePriorMessage: showLastMessage, reserveChars, observerProfile });
     } catch (error) {
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       // context_injected is HOOK-level (no sessionDbId in scope) → null key,
@@ -579,11 +588,14 @@ export class SearchRoutes extends BaseRouteHandler {
     /** "Include last message" for this render; false for any block that may be cached. */
     includePriorMessage: boolean;
     reserveChars?: number;
+    /** The asking session's own Claude account (ContextInput.observerProfile). */
+    observerProfile?: string;
   }): Promise<ContextInjectRender> {
     const { projects, platformSource, forHuman, full } = request;
     // Health banners change with time, and a prior reply is chosen for the
     // session that asked: a block that may carry either is served live only.
-    const cacheable = !request.includePriorMessage && observerHealthWarning(false) === '';
+    // Any session may read a cached block, so a hold on any account keeps it live.
+    const cacheable = !request.includePriorMessage && observerHealthWarning(false, ANY_OBSERVER_ACCOUNT) === '';
 
     // The agent's open to-do lists and working state go in every answer this
     // route gives a session, the welcome hint included: in the memory block
@@ -621,7 +633,7 @@ export class SearchRoutes extends BaseRouteHandler {
         // A project with zero observations is exactly where a failing observer
         // hides: without this the health warning (applied inside
         // generateContextWithStats) never reached the user this early-return serves.
-        return { body: withWorkState(withObserverHealthWarning(hintBody, forHuman)), stats: null, cacheable };
+        return { body: withWorkState(withObserverHealthWarning(hintBody, forHuman, request.observerProfile)), stats: null, cacheable };
       }
     }
 
@@ -647,6 +659,7 @@ export class SearchRoutes extends BaseRouteHandler {
       }),
       timePlaceholders: true,
       includePriorMessage: request.includePriorMessage,
+      ...(request.observerProfile ? { observerProfile: request.observerProfile } : {}),
     }, forHuman, { execution: this.contextReader ? 'worker' : 'inline', reader: this.contextReader ?? undefined });
     return { body: contextResult.text, stats: contextResult.stats, cacheable, ...(contextResult.readKeys ? { readKeys: contextResult.readKeys } : {}) };
   }

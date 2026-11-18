@@ -22,6 +22,7 @@ import { CODEX_REASONING_EFFORTS, isCodexReasoningEffort } from '../../CodexProv
 import { emitContextInvalidation, noteUserSettingsSaved } from '../../../../shared/context-invalidation.js';
 import { WORK_VIEW_AGENT_CHOICES } from '../../../work-view/refresh-task.js';
 import { CORPUS_AGENT_CHOICES } from '../../knowledge/CorpusAgent.js';
+import { OBSERVER_PROFILE_MODES, isObserverProfileMode } from '../../../../shared/observer-profile-mode.js';
 
 const toggleMcpSchema = z.object({
   enabled: z.boolean(),
@@ -348,6 +349,7 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_PYTHON_VERSION',
       'CLAUDE_MEM_CLAUDE_CONFIG_DIR',
       'CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR',
+      'CLAUDE_MEM_OBSERVER_PROFILE',
       'CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS',
       'CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS',
       'CLAUDE_MEM_CONTEXT_SHOW_TERMINAL_OUTPUT',
@@ -579,6 +581,13 @@ export class SettingsRoutes extends BaseRouteHandler {
       if (typeof settings.CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR !== 'string' || !settings.CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR.trim()) {
         return { valid: false, error: 'CLAUDE_MEM_OBSERVER_CLAUDE_CONFIG_DIR must be a non-empty path string, or "" to keep transcripts beside the credential profile' };
       }
+    }
+
+    if (
+      settings.CLAUDE_MEM_OBSERVER_PROFILE !== undefined &&
+      !isObserverProfileMode(settings.CLAUDE_MEM_OBSERVER_PROFILE)
+    ) {
+      return { valid: false, error: `CLAUDE_MEM_OBSERVER_PROFILE must be ${OBSERVER_PROFILE_MODES.map(mode => `"${mode}"`).join(' or ')}` };
     }
 
     const booleanSettings = [
